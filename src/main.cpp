@@ -33,6 +33,14 @@ void printv3d(Eigen::Vector3d v) {
     std::cout << v[0] << ", " << v[1] << ", " << v[2] << std::endl;
 }
 
+void write_matrix3d(std::vector<Eigen::Triplet<double>>& triplets, int rOff, int cOff, const Eigen::Matrix3d& A) {
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            triplets.emplace_back(rOff + i, cOff + j, A(i, j));
+        }
+    }
+}
+
 void updateRenderGeometry()
 {
     int totverts = 0;
@@ -161,8 +169,35 @@ void computeMassInverse(Eigen::SparseMatrix<double>& Minv)
 
 void computeTranslationalForceAndHessian(const Eigen::VectorXd& q, const Eigen::VectorXd& qprev, Eigen::VectorXd& F, Eigen::SparseMatrix<double>& H, double h)
 {
-
+    // next we do gravity:
+    Eigen::VectorXd gFT = Eigen::VectorXd::Zero(q.size());
+    Eigen::SparseMatrix<double> gdFT(q.size(), q.size());
+    std::vector<Eigen::Triplet<double>> gdFT_triplets;
+    Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+    if (params_.gravityEnabled) {
+        for (int i = 0; i < bodies_.size(); i++) {
+            for (int j = i + 1; j < bodies_.size(); j++) {
+                auto mu = params_.gravityG * bodies_[i]->density * bodies_[i]->getTemplate().getVolume()
+                    * bodies_[j]->density * bodies_[j]->getTemplate().getVolume();
+                Eigen::Vector3d r = q.segment<3>(i * 3) - q.segment<3>(j * 3);
+                auto d = r.norm();
+                auto d3 = d * d * d;
+                auto d5 = d3 * d * d;
+                gFT.segment<3>(i * 3) += -mu * r / (d3);
+                gFT.segment<3>(j * 3) += mu * r / (d3);
+                Eigen::Matrix3d K = mu * ((I / d3) - (3 * r * r.transpose() / d5));
+                write_matrix3d(gdFT_triplets, i * 3, i * 3, -K);
+                write_matrix3d(gdFT_triplets, i * 3, j * 3, K);
+                write_matrix3d(gdFT_triplets, j * 3, i * 3, K);
+                write_matrix3d(gdFT_triplets, j * 3, j * 3, -K);
+            }
+        }
+    }
+    gdFT.setFromTriplets(gdFT_triplets.begin(), gdFT_triplets.end());
+    F = gFT;
+    H = gdFT;
 }
+
 void computeRotationalForceAndHessian(const Eigen::VectorXd& q, const Eigen::VectorXd& qprev, Eigen::VectorXd& F, Eigen::SparseMatrix<double>& H, double h)
 {
 
