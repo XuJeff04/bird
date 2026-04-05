@@ -1,3 +1,4 @@
+Names: Clint Wang cjw4592, Jeffery Xu jjx97G
 # Furious Birds Milestone I Starter Code
 
 
