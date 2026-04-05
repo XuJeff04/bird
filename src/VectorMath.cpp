@@ -86,7 +86,7 @@ const Matrix3d VectorMath::DrotVector(const Vector3d &axisangle, const Vector3d 
     return result;
 }
 
-const Eigen::Vector3d VectorMath::randomPointOnSphere()
+const Vector3d VectorMath::randomPointOnSphere()
 {
     std::random_device r;
     std::mt19937 generator(r());
@@ -94,4 +94,14 @@ const Eigen::Vector3d VectorMath::randomPointOnSphere()
     Vector3d vec(distribution(generator), distribution(generator), distribution(generator));
     vec /= vec.norm();
     return vec;
+}
+
+const Vector3d VectorMath::thetaNext(const Vector3d& theta_i,
+                          const Vector3d& w_i,
+                          double h)
+{
+    Matrix3d R_i = rotationMatrix(theta_i);
+    Matrix3d R_inc = rotationMatrix(h * w_i);
+    Matrix3d R_next = R_i * R_inc;
+    return axisAngle(R_next);
 }

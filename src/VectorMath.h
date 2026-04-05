@@ -14,6 +14,9 @@ public:
     static const Eigen::Matrix3d TMatrix(const Eigen::Vector3d &v);
     static double randomUnitIntervalReal();
     static const Eigen::Vector3d randomPointOnSphere();
+    static const Eigen::Vector3d thetaNext(const Eigen::Vector3d& theta_i,
+                          const Eigen::Vector3d& w_i,
+                          double h);
 };
 
 #endif // MATH_H

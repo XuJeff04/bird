@@ -29,6 +29,10 @@ std::vector<RigidBodyInstance*> bodies_;
 Eigen::MatrixXd renderQ;
 Eigen::MatrixXi renderF;
 
+void printv3d(Eigen::Vector3d v) {
+    std::cout << v[0] << ", " << v[1] << ", " << v[2] << std::endl;
+}
+
 void updateRenderGeometry()
 {
     int totverts = 0;
@@ -159,7 +163,98 @@ void computeTranslationalForceAndHessian(const Eigen::VectorXd& q, const Eigen::
 {
 
 }
+void computeRotationalForceAndHessian(const Eigen::VectorXd& q, const Eigen::VectorXd& qprev, Eigen::VectorXd& F, Eigen::SparseMatrix<double>& H, double h)
+{
 
+}
+
+Eigen::Vector3d residualOmega_i(
+    const Eigen::Vector3d& theta,
+    const Eigen::Vector3d& omega_i,
+    const Eigen::Vector3d& omega,
+    const Eigen::Matrix3d& MI,
+    double rho,
+    double h)
+{
+    Eigen::Vector3d prev =
+        VectorMath::TMatrix(h * omega_i).inverse().transpose()
+        * MI * omega_i;
+
+    Eigen::Vector3d next =
+        VectorMath::rotationMatrix(h * omega)
+        * VectorMath::TMatrix(h * omega).inverse().transpose()
+        * MI * omega;
+
+    return (rho / h)
+        * VectorMath::TMatrix(theta).transpose()
+        * (prev - next);
+}
+
+void compute_residualOmega(
+    Eigen::VectorXd& R,
+    const Eigen::VectorXd& q_r,
+    const Eigen::VectorXd& qdot_r,
+    const Eigen::VectorXd& qdot_rp1,
+    const Eigen::VectorXd& F
+) {
+    R = F;
+    for (int i = 0; i < bodies_.size(); i++) {
+        R.segment<3>(i * 3) +=
+            residualOmega_i(
+                q_r.segment<3>(i * 3),
+                qdot_r.segment<3>(i * 3),
+                qdot_rp1.segment<3>(i * 3),
+                bodies_[i]->getTemplate().getInertiaTensor(),
+                bodies_[i]->density,
+                params_.timeStep
+            );
+    }
+}
+
+Eigen::Matrix3d approxJacobianOmega_i(
+    const Eigen::Vector3d& theta,
+    const Eigen::Vector3d& omega,
+    const Eigen::Matrix3d& MI,
+    double rho,
+    double h)
+{
+    return -(rho / h)
+        * VectorMath::TMatrix(theta).transpose()
+        * VectorMath::rotationMatrix(h * omega)
+        * VectorMath::TMatrix(h * omega).inverse().transpose()
+        * MI;
+}
+
+void compute_deltaOmega(
+    Eigen::VectorXd& delta,
+    const Eigen::VectorXd& R,
+    const Eigen::VectorXd& q_r,
+    const Eigen::VectorXd& qdot_rp1
+) {
+    delta.resize(3 * bodies_.size());
+
+    for (int i = 0; i < bodies_.size(); i++) {
+        int base = i * 3;
+
+        Eigen::Matrix3d Ji = approxJacobianOmega_i(
+            q_r.segment<3>(base),
+            qdot_rp1.segment<3>(base),
+            bodies_[i]->getTemplate().getInertiaTensor(),
+            bodies_[i]->density,
+            params_.timeStep
+        );
+
+        Eigen::Vector3d Ri = R.segment<3>(base);
+
+        Eigen::Vector3d deltai = Ji.fullPivLu().solve(-Ri);
+
+        if (!deltai.allFinite()) {
+            assert(false);
+        }
+
+        delta.segment<3>(base) = deltai;
+    }
+}
 
 
 void numericalIntegration(Eigen::VectorXd& q, Eigen::VectorXd& qdot) {
@@ -169,9 +264,9 @@ void numericalIntegration(Eigen::VectorXd& q, Eigen::VectorXd& qdot) {
 
     {
         // translational forces
-        auto q_t = q.segment(0, bodies_.size() * 3);
-        auto qdot_t = qdot.segment(0, bodies_.size() * 3);
-        auto qprev_t = q_t;
+        Eigen::VectorXd q_t = q.segment(0, bodies_.size() * 3);
+        Eigen::VectorXd qdot_t = qdot.segment(0, bodies_.size() * 3);
+        Eigen::VectorXd qprev_t = q_t;
         Eigen::VectorXd F(3* bodies_.size());
         Eigen::SparseMatrix<double> H(3 * bodies_.size(), 3 * bodies_.size());
         Eigen::SparseMatrix<double> I(3 * bodies_.size(), 3 * bodies_.size());
@@ -198,7 +293,7 @@ void numericalIntegration(Eigen::VectorXd& q, Eigen::VectorXd& qdot) {
             q_t += deltaq;
             iters--;
             computeTranslationalForceAndHessian(q_t, qprev_t, F, H, params_.timeStep);
-            R = q_t - qprev_t - (h * qdot) - (h * h * Minv * F);
+            R = q_t - qprev_t - (h * qdot_t) - (h * h * Minv * F);
         }
         qdot_t += h * Minv * F;
         q.segment(0, bodies_.size() * 3) = q_t;
@@ -207,7 +302,45 @@ void numericalIntegration(Eigen::VectorXd& q, Eigen::VectorXd& qdot) {
 
     {
         // rotational forces
+        Eigen::VectorXd q_r = q.segment(bodies_.size() * 3, bodies_.size() * 3);
+        Eigen::VectorXd qdot_r = qdot.segment(bodies_.size() * 3, bodies_.size() * 3);
+        Eigen::VectorXd qprev_r = q_r;
 
+        Eigen::VectorXd F(3 * bodies_.size());
+        F.setZero();
+        Eigen::SparseMatrix<double> H(3 * bodies_.size(), 3 * bodies_.size());
+
+        // explicit theta_{i+1}
+        for (int i = 0; i < bodies_.size(); i++) {
+            q_r.segment<3>(i * 3) =
+                VectorMath::thetaNext(
+                    q_r.segment<3>(i * 3),
+                    qdot_r.segment<3>(i * 3),
+                    h
+                );
+        }
+
+        computeRotationalForceAndHessian(q_r, qprev_r, F, H, params_.timeStep);
+
+        auto iters = params_.NewtonMaxIters;
+        Eigen::VectorXd R(3 * bodies_.size());
+        Eigen::VectorXd delta(3 * bodies_.size());
+        auto qdot_rp1 = qdot_r;
+
+        compute_residualOmega(R, q_r, qdot_r, qdot_rp1, F);
+
+        while (R.norm() > params_.NewtonTolerance && iters) {
+            compute_deltaOmega(delta, R, q_r, qdot_rp1);
+
+            qdot_rp1 += delta;
+
+            iters--;
+            compute_residualOmega(R, q_r, qdot_r, qdot_rp1, F);
+        }
+
+        qdot_r = qdot_rp1;
+        q.segment(bodies_.size() * 3, bodies_.size() * 3) = q_r;
+        qdot.segment(bodies_.size() * 3, bodies_.size() * 3) = qdot_r;
     }
 }
 
