@@ -123,10 +123,106 @@ void initSimulation()
     updateRenderGeometry();
 }
 
+void build_dofs(Eigen::VectorXd& q, Eigen::VectorXd& qdot) {
+    for (int i = 0; i < bodies_.size(); i++) {
+        q.segment<3>(i * 3 + 0) = bodies_[i]->c;
+        q.segment<3>(i * 3 + bodies_.size() * 3) = bodies_[i]->theta;
+        qdot.segment<3>(i * 3 + 0) = bodies_[i]->cvel;
+        qdot.segment<3>(i * 3 + bodies_.size() * 3) = bodies_[i]->w;
+    }
+}
+
+void unbuild_dofs(Eigen::VectorXd q, Eigen::VectorXd qdot) {
+    for (int i = 0; i < bodies_.size(); i++) {
+        bodies_[i]->c = q.segment<3>(i * 3 + 0);
+        bodies_[i]->theta = q.segment<3>(i * 3 + bodies_.size() * 3);
+        bodies_[i]->cvel = qdot.segment<3>(i * 3 + 0);
+        bodies_[i]->w = qdot.segment<3>(i * 3 + bodies_.size() * 3);
+    }
+}
+
+void computeMassInverse(Eigen::SparseMatrix<double>& Minv)
+{
+    std::vector<Eigen::Triplet<double>> triplets;
+    for (int i = 0; i < bodies_.size(); i++) {
+        triplets.emplace_back(i * 3 + 0, i * 3 + 0,
+            1.0 / bodies_[i]->density * bodies_[i]->getTemplate().getVolume());
+        triplets.emplace_back(i * 3 + 1, i * 3 + 1,
+            1.0 / bodies_[i]->density * bodies_[i]->getTemplate().getVolume());
+        triplets.emplace_back(i * 3 + 2, i * 3 + 2,
+            1.0 / bodies_[i]->density * bodies_[i]->getTemplate().getVolume());
+    }
+    Minv.setFromTriplets(triplets.begin(), triplets.end());
+}
+
+void computeTranslationalForceAndHessian(const Eigen::VectorXd& q, const Eigen::VectorXd& qprev, Eigen::VectorXd& F, Eigen::SparseMatrix<double>& H, double h)
+{
+
+}
+
+
+
+void numericalIntegration(Eigen::VectorXd& q, Eigen::VectorXd& qdot) {
+    auto h = params_.timeStep;
+    Eigen::SparseMatrix<double> Minv(bodies_.size() * 3, bodies_.size() * 3);
+    computeMassInverse(Minv);
+
+    {
+        // translational forces
+        auto q_t = q.segment(0, bodies_.size() * 3);
+        auto qdot_t = qdot.segment(0, bodies_.size() * 3);
+        auto qprev_t = q_t;
+        Eigen::VectorXd F(3* bodies_.size());
+        Eigen::SparseMatrix<double> H(3 * bodies_.size(), 3 * bodies_.size());
+        Eigen::SparseMatrix<double> I(3 * bodies_.size(), 3 * bodies_.size());
+        Eigen::SparseMatrix<double> A;
+        Eigen::VectorXd b;
+        I.setIdentity();
+        qprev_t = q_t;
+        q_t += h * qdot_t;
+        computeTranslationalForceAndHessian(q_t, qprev_t, F, H, h);
+        Eigen::VectorXd R = q_t - qprev_t - (h * qdot_t) - (h * h * Minv * F);
+        auto iters = params_.NewtonMaxIters;
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
+        while (R.norm() > params_.NewtonTolerance && iters) {
+            A = I + ((h * h) * Minv * H);
+            b = -R;
+            solver.compute(A);
+            if (solver.info() != Eigen::Success) {
+                assert(false);
+            }
+            Eigen::VectorXd deltaq = solver.solve(b);
+            if (solver.info() != Eigen::Success) {
+                assert(false);
+            }
+            q_t += deltaq;
+            iters--;
+            computeTranslationalForceAndHessian(q_t, qprev_t, F, H, params_.timeStep);
+            R = q_t - qprev_t - (h * qdot) - (h * h * Minv * F);
+        }
+        qdot_t += h * Minv * F;
+        q.segment(0, bodies_.size() * 3) = q_t;
+        qdot.segment(0, bodies_.size() * 3) = qdot_t;
+    }
+
+    {
+        // rotational forces
+
+    }
+}
+
 
 void simulateOneStep()
 {
     time_ += params_.timeStep;
+    Eigen::VectorXd q(bodies_.size() * 6);
+    Eigen::VectorXd qdot(bodies_.size() * 6);
+    build_dofs(q, qdot);
+
+    numericalIntegration(q, qdot);
+
+    unbuild_dofs(q, qdot);
+
 
     // TODO: Gather DOFs, compute forces, integrate time, write DOFs back to rigid bodies
 
