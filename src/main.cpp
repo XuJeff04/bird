@@ -158,11 +158,11 @@ void computeMassInverse(Eigen::SparseMatrix<double>& Minv)
     std::vector<Eigen::Triplet<double>> triplets;
     for (int i = 0; i < bodies_.size(); i++) {
         triplets.emplace_back(i * 3 + 0, i * 3 + 0,
-            1.0 / bodies_[i]->density * bodies_[i]->getTemplate().getVolume());
+            1.0 / (bodies_[i]->density * bodies_[i]->getTemplate().getVolume()));
         triplets.emplace_back(i * 3 + 1, i * 3 + 1,
-            1.0 / bodies_[i]->density * bodies_[i]->getTemplate().getVolume());
+            1.0 / (bodies_[i]->density * bodies_[i]->getTemplate().getVolume()));
         triplets.emplace_back(i * 3 + 2, i * 3 + 2,
-            1.0 / bodies_[i]->density * bodies_[i]->getTemplate().getVolume());
+            1.0 / (bodies_[i]->density * bodies_[i]->getTemplate().getVolume()));
     }
     Minv.setFromTriplets(triplets.begin(), triplets.end());
 }
@@ -175,7 +175,7 @@ void computeTranslationalForceAndHessian(const Eigen::VectorXd& q, const Eigen::
     std::vector<Eigen::Triplet<double>> gdFT_triplets;
     Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
     if (params_.gravityEnabled) {
-        for (int i = 0; i < bodies_.size(); i++) {
+        for (int i = 0; i < bodies_.size() - 1; i++) {
             for (int j = i + 1; j < bodies_.size(); j++) {
                 auto mu = params_.gravityG * bodies_[i]->density * bodies_[i]->getTemplate().getVolume()
                     * bodies_[j]->density * bodies_[j]->getTemplate().getVolume();
@@ -303,34 +303,11 @@ void numericalIntegration(Eigen::VectorXd& q, Eigen::VectorXd& qdot) {
         Eigen::VectorXd qdot_t = qdot.segment(0, bodies_.size() * 3);
         Eigen::VectorXd qprev_t = q_t;
         Eigen::VectorXd F(3* bodies_.size());
+        F.setZero();
         Eigen::SparseMatrix<double> H(3 * bodies_.size(), 3 * bodies_.size());
-        Eigen::SparseMatrix<double> I(3 * bodies_.size(), 3 * bodies_.size());
-        Eigen::SparseMatrix<double> A;
-        Eigen::VectorXd b;
-        I.setIdentity();
-        qprev_t = q_t;
-        q_t += h * qdot_t;
-        computeTranslationalForceAndHessian(q_t, qprev_t, F, H, h);
-        Eigen::VectorXd R = q_t - qprev_t - (h * qdot_t) - (h * h * Minv * F);
-        auto iters = params_.NewtonMaxIters;
-        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
-        while (R.norm() > params_.NewtonTolerance && iters) {
-            A = I + ((h * h) * Minv * H);
-            b = -R;
-            solver.compute(A);
-            if (solver.info() != Eigen::Success) {
-                assert(false);
-            }
-            Eigen::VectorXd deltaq = solver.solve(b);
-            if (solver.info() != Eigen::Success) {
-                assert(false);
-            }
-            q_t += deltaq;
-            iters--;
-            computeTranslationalForceAndHessian(q_t, qprev_t, F, H, params_.timeStep);
-            R = q_t - qprev_t - (h * qdot_t) - (h * h * Minv * F);
-        }
-        qdot_t += h * Minv * F;
+        q_t += params_.timeStep * qdot_t;
+        computeTranslationalForceAndHessian(q_t, qprev_t, F, H, params_.timeStep);
+        qdot_t += params_.timeStep * Minv * F;
         q.segment(0, bodies_.size() * 3) = q_t;
         qdot.segment(0, bodies_.size() * 3) = qdot_t;
     }
